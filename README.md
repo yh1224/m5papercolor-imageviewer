@@ -19,6 +19,8 @@ An image viewer firmware for M5PaperColor. It displays images stored in the root
 | Button B | Show the previous image                                                                 |
 | Button C | Reinitialize and return to the start screen (also reloads the SD card after swapping it) |
 
+The red LED lights up while the screen is being redrawn. Button presses during this time are ignored, so wait until the LED turns off before pressing a button.
+
 ## Build & Flash
 
 Requires [PlatformIO](https://platformio.org/).
