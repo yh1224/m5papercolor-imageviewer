@@ -8,6 +8,7 @@
 #include "lib/image.h"
 #include "lib/led.h"
 #include "lib/sd.h"
+#include "lib/step_queue.h"
 
 // data/start.png is embedded by the linker via board_build.embed_files
 // in platformio.ini; the symbol names derive from that path.
@@ -21,6 +22,12 @@ static M5PM1 pm1;
 
 static std::vector<String> imagePaths;
 static int currentImageIndex = -1;
+
+// Image navigation is applied once the buttons have been idle for
+// kNavigateDelayMs, accumulating repeated presses into a single redraw
+// because each e-paper refresh is slow.
+static const uint32_t kNavigateDelayMs = 1000;
+static StepQueue stepQueue{kNavigateDelayMs};
 
 static bool powerReady = false;
 static bool sdReady = false;
@@ -150,7 +157,8 @@ static void updateImage()
 
 // Moves the current image selection by `step` positions, wrapping around
 // the list, and redraws the screen. When no image is selected, a forward
-// step starts from the first image and a backward step from the last.
+// step of n selects the n-th image and a backward step of n the n-th
+// image from the end.
 static void selectImage(const int step)
 {
     const size_t numImages = imagePaths.size();
@@ -158,18 +166,21 @@ static void selectImage(const int step)
         return;
     }
 
+    const int n = static_cast<int>(numImages);
+    int index;
     if (currentImageIndex < 0) {
-        currentImageIndex = step > 0 ? 0 : static_cast<int>(numImages) - 1;
+        index = step > 0 ? step - 1 : n + step;
     } else {
-        currentImageIndex = (currentImageIndex + step + static_cast<int>(numImages)) % static_cast<int>(numImages);
+        index = currentImageIndex + step;
     }
+    currentImageIndex = ((index % n) + n) % n;
     Serial.printf("Selected image: %s\n", imagePaths[static_cast<size_t>(currentImageIndex)].c_str());
     updateImage();
 }
 
 // (Re)initializes power control, the SD card, the image list, and the
-// speaker, then shows the default image. Called from setup() and when
-// BtnC is pressed.
+// speaker, discards any pending navigation, then shows the default image.
+// Called from setup() and when BtnC is pressed.
 void init()
 {
     powerReady = beginPowerControl();
@@ -192,6 +203,7 @@ void init()
     M5.Speaker.setVolume(128);
 
     currentImageIndex = -1;
+    stepQueue.clear();
     updateImage();
 }
 
@@ -223,19 +235,28 @@ void setup()
     init();
 }
 
-// Polls the buttons each cycle, switching images or reinitializing back
-// to the default image.
+// Polls the buttons each cycle, queueing image navigation (drawn after the
+// buttons go idle) or reinitializing back to the default image immediately.
+// Navigation presses are accepted while there are images, each with a short
+// click.
 void loop()
 {
     M5.update();
-    if (M5.BtnA.wasPressed()) {
-        selectImage(1);
+    const bool canNavigate = !imagePaths.empty();
+    if (canNavigate && M5.BtnA.wasPressed()) {
+        M5.Speaker.tone(1000, 30);
+        stepQueue.push(1);
     }
-    if (M5.BtnB.wasPressed()) {
-        selectImage(-1);
+    if (canNavigate && M5.BtnB.wasPressed()) {
+        M5.Speaker.tone(1000, 30);
+        stepQueue.push(-1);
     }
     if (M5.BtnC.wasPressed()) {
         init();
+    }
+    const int step = stepQueue.update();
+    if (step != 0) {
+        selectImage(step);
     }
     delay(50);
 }
